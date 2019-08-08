@@ -31,17 +31,64 @@ class Parameters:
     MEAN_CUSTOMER_ARRIVAL_RATE_PER_MIN = 4
     SD_CUSTOMER_ARRIVAL_RATE_PER_MIN = 2
 
-    MEAN_UNITS_OF_WORK_PER_CUSTOMER = 8
-    SD_UNITS_OF_WORK_PER_CUSTOMER = 6
+    MEAN_UNITS_OF_WORK_PER_CUSTOMER = 12
+    SD_UNITS_OF_WORK_PER_CUSTOMER = 4
 
-    NUM_SERVERS = 4
-    MEAN_UNITS_OF_WORK_PER_SERVER_PER_MIN = 14
-    SD_UNITS_OF_WORK_PER_SERVER_PER_MIN = 4
+    NUM_SERVERS = 3
+    MEAN_UNITS_OF_WORK_PER_SERVER_PER_MIN = 15
+    SD_UNITS_OF_WORK_PER_SERVER_PER_MIN = 5
 
-    HOURS_TO_RUN = 8
+    HOURS_TO_RUN = 3
     MINUTES_TO_RUN = HOURS_TO_RUN * 60
 
-class Simulation:
+
+class SimulationEngine:
+    """
+    Used to generate cashiers and customers in the simulation. Uses the Parameters class for
+    mean and standard deviation of values related to generating cashiers and customers.
+    ...
+
+    Methods
+    -------
+    generateCashiers()
+        a class method that creates the number of cashiers requested with a given mean and standard
+        deviation for work per minute
+
+    generateCustomerArrivals(time)
+        a class method that creates the number of cashiers requested with a given mean and standard
+        deviation for work per minute from the Parameters class
+
+    newCustomers(timeNow)
+        instantiates a number of customers based on the Parameters class, with each customer in need
+        of some units of work
+    """
+
+    def generateCashiers():
+        workerSpeeds = np.random.normal(
+            Parameters.MEAN_UNITS_OF_WORK_PER_SERVER_PER_MIN,
+            Parameters.SD_UNITS_OF_WORK_PER_SERVER_PER_MIN,
+            Parameters.NUM_SERVERS)
+
+        return [Server(abs(workerSpeed)) for workerSpeed in workerSpeeds]
+
+    def generateCustomerArrivals():
+        arrivals = np.random.normal(
+            Parameters.MEAN_CUSTOMER_ARRIVAL_RATE_PER_MIN,
+            Parameters.SD_CUSTOMER_ARRIVAL_RATE_PER_MIN,
+            1)
+        return abs(int(arrivals[0]))
+
+    def newCustomers(timeNow):
+        numArrivals = SimulationEngine.generateCustomerArrivals()
+
+        workPerCustomer = np.random.normal(
+            Parameters.MEAN_UNITS_OF_WORK_PER_CUSTOMER,
+            Parameters.SD_UNITS_OF_WORK_PER_CUSTOMER,
+            numArrivals)
+
+        return [Customer(abs(work), timeNow) for work in workPerCustomer]
+
+class SimulationManager:
     """
     The main class used to run the simulation of customers being serviced by cashiers at a store.
     ...
@@ -51,33 +98,21 @@ class Simulation:
     run()
         A class method used to run the simulation, creates all the cashiers needed anda line with
         those cashiers, and then iterates through the amount of minutes specified in the Parameters class
-        and simulates the arrival of new customers and the processing of those customers each minute
     """
 
     def run():
-        cashiers = Server.getServers(
-            Parameters.NUM_SERVERS,
-            Parameters.MEAN_UNITS_OF_WORK_PER_SERVER_PER_MIN,
-            Parameters.SD_UNITS_OF_WORK_PER_SERVER_PER_MIN)
+        cashiers = SimulationEngine.generateCashiers()
 
         line = CustomerLine(cashiers)
         for minute in range(Parameters.MINUTES_TO_RUN):
-            customers = Customer.newCustomers(
-                minute,
-                Parameters.MEAN_CUSTOMER_ARRIVAL_RATE_PER_MIN,
-                Parameters.SD_CUSTOMER_ARRIVAL_RATE_PER_MIN,
-                Parameters.MEAN_UNITS_OF_WORK_PER_CUSTOMER,
-                Parameters.SD_UNITS_OF_WORK_PER_CUSTOMER)
+            customers = SimulationEngine.newCustomers(minute)
 
             line.process(customers, minute)
 
         #print("Service Times", Customer.ServiceTimes)
-        print("Customers finished", Customer.TotalFinished)
+        Customer.printStatistics()
         print("Number of customers still in line", line.size())
-        print(
-            "Average Wait Time",
-            sum(Customer.ServiceTimes) / len(Customer.ServiceTimes),
-            "Minutes")
+
 
 
 
@@ -108,14 +143,15 @@ class CustomerLine:
         self.cashiers = _cashiers
         self.customerQueue = deque()
 
-    def process(self, customers: list, time: int):
+    def process(self, customers: list, timeNow: int):
         self.customerQueue += customers
 
         for cashier in self.cashiers:
-            if self.customerQueue and cashier.isIdle():
-                cashier.customer = self.customerQueue.popleft()
+            while self.customerQueue and cashier.canDoMoreWorkThisMinute(timeNow):
+                if cashier.isIdle():
+                    cashier.assignCustomer(self.customerQueue.popleft(), timeNow)
 
-            cashier.process(time)
+                cashier.process(timeNow)
 
     def size(self):
         return len(self.customerQueue)
@@ -137,36 +173,56 @@ class Server:
 
     Methods
     -------
-    getServers(numServers, avgWorkPerMin, sdOfWorkPerMin)
-        a class method that creates the number of cashiers requested with a given mean and standard
-        deviation for work per minute
-
     isIdle(self)
         returns whether or not the cashier is free to take another customer or not
 
     process(self, currentTime)
         simulates 1 minute of time for the cashier, where if a customer is assigned to this cashier
         the cashier will make progress on servicing that customer
+
+    canDoMoreWorkThisMinute(self, timeNow)
+        returns a boolean to indicate whether or not this cashier has used up all of their units of work
+        for this minute in the simulation
+
+    assignCustomer(self, customer, timeNow)
+        assigns the customer to the cashier and calls a method to indicate that the customer is no longer
+        waiting in the queue to record the waiting time
     """
 
     def __init__(self, _workPerMin: float):
         self.unitsOfWorkPerMin =_workPerMin
+        self.workDoneInLastMin = 0
+        self.lastCustomerTime = -1
         self.customersServed = 0
         self.customer = None
 
-    def getServers(numServers, avgWorkPerMin, sdOfWorkPerMin):
-        workerSpeeds = np.random.normal(avgWorkPerMin, sdOfWorkPerMin, numServers)
-        return [Server(abs(workerSpeed)) for workerSpeed in workerSpeeds]
-
     def isIdle(self):
         return self.customer == None
+
+    def canDoMoreWorkThisMinute(self, timeNow):
+        return self.lastCustomerTime < timeNow or self.workDoneInLastMin < self.unitsOfWorkPerMin
+
+    def assignCustomer(self, customer, timeNow):
+        customer.finishedWaiting(timeNow)
+        self.customer = customer
 
     def process(self, currentTime):
         if not self.customer:
             return
 
-        workRemaining = self.customer.help(self.unitsOfWorkPerMin, currentTime)
-        if workRemaining <= 0:
+        # reset work done this minute if this is first time method is being called for this time
+        if self.lastCustomerTime < currentTime:
+            self.workDoneInLastMin = 0
+            self.lastCustomerTime = currentTime
+
+        workToBeDone = min(
+            self.customer.workRemaining,
+            self.unitsOfWorkPerMin - self.workDoneInLastMin)
+
+        self.customer.help(workToBeDone, currentTime, workToBeDone / self.unitsOfWorkPerMin)
+        self.workDoneInLastMin += workToBeDone
+
+        if self.customer.isFinished():
             self.customer = None
             self.customersServed += 1
 
@@ -189,19 +245,19 @@ class Customer:
 
     Methods
     -------
-    numCustomerArrivalsThisMinute(time, arrivalRate, arrivalSD, workPerCustomerAvg, workPerCustomerSD)
-        a class method that creates the number of cashiers requested with a given mean and standard
-        deviation for work per minute
-
-    newCustomers(timeNow, arrivalRate, arrivalSD, workPerCustomerAvg, workPerCustomerSD)
-        instantiates a number of customers based on the Parameters class, with each customer in need
-        of some units of work
-
     help(self, workCompleted, timeNow)
         complete some of the customers work and return the work remaining (0 or negative if
         work is complete)
+
+    finishedWaiting(self, currentTime)
+        for indicating that the customer has finished waiting in the queue for service and saving
+        time waited into WaitingTimes
+
+    isFinished(self)
+        inidicates if the customer has finished getting service
     """
 
+    WaitingTimes = []
     ServiceTimes = []
     TotalFinished = 0
 
@@ -209,25 +265,35 @@ class Customer:
         self.unitsOfWorkToComplete = _unitsOfWork
         self.workRemaining = _unitsOfWork
         self.timeEnteredLine = _time
+        self.timeExitedLine = -1
 
-    def numCustomerArrivalsThisMinute(customersPerMinAvg, customersPerMinSd):
-        arrivals = np.random.normal(customersPerMinAvg, customersPerMinSd, 1)
-        return abs(int(arrivals[0]))
-
-    def newCustomers(timeNow, arrivalRate, arrivalSD, workPerCustomerAvg, workPerCustomerSD):
-        numArrivals = Customer.numCustomerArrivalsThisMinute(arrivalRate, arrivalSD)
-        workPerCustomer = np.random.normal(workPerCustomerAvg, workPerCustomerSD, numArrivals)
-
-        return [Customer(abs(work), timeNow) for work in workPerCustomer]
-
-    def help(self, workCompleted, timeNow):
+    def help(self, workCompleted, timeNow, percentOfMinuteHelped):
         self.workRemaining -= workCompleted
         if self.workRemaining <= 0:
-            serviceTime = timeNow - self.timeEnteredLine
+            # need to add fraction of current minute to get total service time for customer
+            serviceTime = timeNow - self.timeExitedLine + percentOfMinuteHelped
+
             Customer.ServiceTimes.append(serviceTime)
             Customer.TotalFinished += 1
 
-        return self.workRemaining
+    def isFinished(self):
+        return self.workRemaining <= 0
+
+    def finishedWaiting(self, currentTime):
+        self.timeExitedLine = currentTime
+        Customer.WaitingTimes.append(self.timeExitedLine - self.timeEnteredLine)
+
+    def printStatistics():
+        print("Customers finished", Customer.TotalFinished)
+        print(
+            "Average Wait Time",
+            sum(Customer.WaitingTimes) / len(Customer.WaitingTimes),
+            "Minutes")
+
+        print(
+            "Average Service Time",
+            sum(Customer.ServiceTimes) / len(Customer.ServiceTimes),
+            "Minutes")
 
 
-Simulation.run()
+SimulationManager.run()
