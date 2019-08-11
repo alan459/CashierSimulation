@@ -28,18 +28,20 @@ class Parameters:
         The number of hours to run the simulation, which get fed into minutes to run which will contain
         the total amount of minutes to run the simulation for
     """
-    MEAN_CUSTOMER_ARRIVAL_RATE_PER_MIN = 4
+    MEAN_CUSTOMER_ARRIVAL_RATE_PER_MIN = 8
     SD_CUSTOMER_ARRIVAL_RATE_PER_MIN = 2
 
-    MEAN_UNITS_OF_WORK_PER_CUSTOMER = 12
+    MEAN_UNITS_OF_WORK_PER_CUSTOMER = 10
     SD_UNITS_OF_WORK_PER_CUSTOMER = 4
 
-    NUM_SERVERS = 3
+    NUM_SERVERS = 4
     MEAN_UNITS_OF_WORK_PER_SERVER_PER_MIN = 15
     SD_UNITS_OF_WORK_PER_SERVER_PER_MIN = 5
 
     HOURS_TO_RUN = 3
     MINUTES_TO_RUN = HOURS_TO_RUN * 60
+
+    LINE_CAP = 10
 
 
 class SimulationEngine:
@@ -62,7 +64,7 @@ class SimulationEngine:
         instantiates a number of customers based on the Parameters class, with each customer in need
         of some units of work
     """
-
+    @staticmethod
     def generateCashiers():
         workerSpeeds = np.random.normal(
             Parameters.MEAN_UNITS_OF_WORK_PER_SERVER_PER_MIN,
@@ -71,6 +73,7 @@ class SimulationEngine:
 
         return [Server(abs(workerSpeed)) for workerSpeed in workerSpeeds]
 
+    @staticmethod
     def generateCustomerArrivals():
         arrivals = np.random.normal(
             Parameters.MEAN_CUSTOMER_ARRIVAL_RATE_PER_MIN,
@@ -78,6 +81,7 @@ class SimulationEngine:
             1)
         return abs(int(arrivals[0]))
 
+    @staticmethod
     def newCustomers(timeNow):
         numArrivals = SimulationEngine.generateCustomerArrivals()
 
@@ -100,10 +104,11 @@ class SimulationManager:
         those cashiers, and then iterates through the amount of minutes specified in the Parameters class
     """
 
+    @staticmethod
     def run():
         cashiers = SimulationEngine.generateCashiers()
 
-        line = CustomerLine(cashiers)
+        line = CustomerLine(cashiers, Parameters.LINE_CAP)
         for minute in range(Parameters.MINUTES_TO_RUN):
             customers = SimulationEngine.newCustomers(minute)
 
@@ -112,6 +117,7 @@ class SimulationManager:
         #print("Service Times", Customer.ServiceTimes)
         Customer.printStatistics()
         print("Number of customers still in line", line.size())
+        print("Customers Lost,", CustomerLine.CustomersLost)
 
 
 
@@ -139,19 +145,41 @@ class CustomerLine:
         Returns the size of the line
     """
 
-    def __init__(self, _cashiers):
+    CustomersLost = 0
+
+
+    def __init__(self, _cashiers, _cap):
         self.cashiers = _cashiers
         self.customerQueue = deque()
+        self.cap = _cap
 
-    def process(self, customers: list, timeNow: int):
-        self.customerQueue += customers
 
+    def process(self, customers, timeNow):
+
+        self.addCustomersToLine(customers)
+        self.workOnCustomers(timeNow)
+
+
+    def addCustomersToLine(self, customers):
+        # check if adding new customers will put line size over capacity and add them so that capacity isn't exceeded
+        if len(self.customerQueue) + len(customers) <= self.cap:
+            self.customerQueue += customers
+        else:
+            customersToAdd = self.cap - len(self.customerQueue)
+            CustomerLine.CustomersLost += len(customers) - customersToAdd
+
+            for i in range(customersToAdd):
+                self.customerQueue.append(customers[i])
+
+
+    def workOnCustomers(self, timeNow):
         for cashier in self.cashiers:
             while self.customerQueue and cashier.canDoMoreWorkThisMinute(timeNow):
                 if cashier.isIdle():
                     cashier.assignCustomer(self.customerQueue.popleft(), timeNow)
 
                 cashier.process(timeNow)
+
 
     def size(self):
         return len(self.customerQueue)
@@ -189,7 +217,7 @@ class Server:
         waiting in the queue to record the waiting time
     """
 
-    def __init__(self, _workPerMin: float):
+    def __init__(self, _workPerMin):
         self.unitsOfWorkPerMin =_workPerMin
         self.workDoneInLastMin = 0
         self.lastCustomerTime = -1
@@ -283,6 +311,7 @@ class Customer:
         self.timeExitedLine = currentTime
         Customer.WaitingTimes.append(self.timeExitedLine - self.timeEnteredLine)
 
+    @staticmethod
     def printStatistics():
         print("Customers finished", Customer.TotalFinished)
         print(
